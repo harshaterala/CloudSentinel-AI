@@ -7,6 +7,8 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 DATASET_PATH = DATA_DIR / "cloud_resources.json"
+LOGS_DIR = DATA_DIR / "logs"
+USE_SIMULATED_INGESTION = os.getenv("USE_SIMULATED_INGESTION", "true").lower() == "true"
 
 # ── Scoring weights (UPS = SECURITY_WEIGHT × SRS + COST_WEIGHT × CRS) ────
 SECURITY_WEIGHT = 0.7

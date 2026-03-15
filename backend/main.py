@@ -1,9 +1,4 @@
-"""
-GenAI-Powered Cloud Security Copilot — FastAPI Backend
-======================================================
-Exposes a REST API that runs the complete analysis pipeline
-(ETL → SRS → CRS → UPS) and serves results + AI explanations.
-"""
+"""GenAI Cloud Security Copilot FastAPI backend."""
 
 from __future__ import annotations
 
@@ -11,29 +6,41 @@ import logging
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
-# Ensure project root is on sys.path so that `backend.*` imports resolve
+import pandas as pd
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+
+# Ensure project root is on sys.path so that `backend.*` imports resolve.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-
+from backend.ai_explainer.rag_engine import RAGEngine
 from backend.config import (
-    DATASET_PATH, APP_TITLE, APP_VERSION, APP_DESCRIPTION,
-    SECURITY_WEIGHT, COST_WEIGHT, LLM_PROVIDER,
+    APP_DESCRIPTION,
+    APP_TITLE,
+    APP_VERSION,
+    COST_WEIGHT,
+    DATASET_PATH,
+    LLM_PROVIDER,
+    LOGS_DIR,
+    SECURITY_WEIGHT,
+    USE_SIMULATED_INGESTION,
 )
-from backend.data_loader.loader import load_and_prepare
-from backend.risk_engine.security_risk import compute_security_risk
 from backend.cost_engine.cost_risk import compute_cost_risk
+from backend.data_loader.loader import load_json, normalize_dataframe, validate_dataset
+from backend.risk_engine.security_risk import compute_security_risk
 from backend.scoring.unified_scorer import compute_unified_priority
+from backend.services.cost_savings import apply_cost_savings_methodology, summarize_cost_savings
+from backend.services.ingestion import normalize_cloud_inputs, normalize_cloud_inputs_from_payload
+from backend.services.prioritization import recommended_action, short_reason
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ── FastAPI App ───────────────────────────────────────────────────────────
 
 app = FastAPI(
     title=APP_TITLE,
@@ -51,23 +58,79 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Lazy globals — populated on first request ─────────────────────────────
-
-_df = None
+_df: pd.DataFrame | None = None
 _explainer = None
+_rag: RAGEngine | None = None
 _startup_time = time.time()
 
 
-def _get_df():
+PUBLIC_COLUMNS = [
+    "resource_id",
+    "resource_type",
+    "cloud_provider",
+    "region",
+    "cpu_usage",
+    "monthly_cost",
+    "exposed_to_public",
+    "data_sensitivity",
+    "days_exposed",
+    "config_severity",
+    "storage_encrypted",
+    "open_security_group",
+    "tags",
+    "security_risk_score",
+    "cost_risk_score",
+    "unified_priority_score",
+    "risk_level",
+    "exposure_level",
+    "priority_rank",
+    "idle_resource",
+    "oversized_resource",
+    "orphaned_asset",
+    "estimated_waste",
+    "avoidable_waste",
+    "projected_optimized_cost",
+    "savings_percentage",
+]
+
+
+class CopilotQueryRequest(BaseModel):
+    query: str = Field(..., min_length=1)
+    top_k: int = Field(5, ge=1, le=20)
+
+
+class IngestionPayloadRequest(BaseModel):
+    iam_logs: list[dict[str, Any]] = Field(default_factory=list)
+    storage_access_logs: list[dict[str, Any]] = Field(default_factory=list)
+    security_groups: list[dict[str, Any]] = Field(default_factory=list)
+    usage_metrics: list[dict[str, Any]] = Field(default_factory=list)
+    apply_to_runtime: bool = False
+
+
+def _run_pipeline(records: list[dict[str, Any]] | None = None) -> pd.DataFrame:
+    if records is None:
+        if USE_SIMULATED_INGESTION and LOGS_DIR.exists():
+            logger.info("Using simulated cloud telemetry ingestion from %s", LOGS_DIR)
+            records = normalize_cloud_inputs(DATASET_PATH, LOGS_DIR)
+        else:
+            records = load_json(DATASET_PATH)
+
+    valid = validate_dataset(records)
+    df = pd.DataFrame(valid)
+    df = normalize_dataframe(df)
+    df = compute_security_risk(df)
+    df = compute_cost_risk(df)
+    df = compute_unified_priority(df)
+    df = apply_cost_savings_methodology(df)
+    return df
+
+
+def _get_df() -> pd.DataFrame:
     global _df
     if _df is None:
         logger.info("Running analysis pipeline...")
-        df = load_and_prepare(DATASET_PATH)
-        df = compute_security_risk(df)
-        df = compute_cost_risk(df)
-        df = compute_unified_priority(df)
-        _df = df
-        logger.info("Pipeline complete — %d resources analysed.", len(df))
+        _df = _run_pipeline()
+        logger.info("Pipeline complete — %d resources analysed.", len(_df))
     return _df
 
 
@@ -75,122 +138,238 @@ def _get_explainer():
     global _explainer
     if _explainer is None:
         from backend.ai_explainer.explainer import AIExplainer
+
         _explainer = AIExplainer()
         logger.info("AI Explainer initialised (mode=%s).", LLM_PROVIDER)
     return _explainer
 
 
-# ── Columns exposed in API responses ──────────────────────────────────────
-
-PUBLIC_COLUMNS = [
-    "resource_id", "resource_type", "cloud_provider", "region",
-    "cpu_usage", "monthly_cost",
-    "exposed_to_public", "data_sensitivity", "days_exposed",
-    "config_severity", "storage_encrypted", "open_security_group",
-    "tags",
-    "security_risk_score", "cost_risk_score", "unified_priority_score",
-    "risk_level", "exposure_level", "priority_rank",
-    "idle_resource", "oversized_resource", "estimated_waste",
-]
+def _get_rag() -> RAGEngine:
+    global _rag
+    if _rag is None:
+        _rag = RAGEngine()
+    return _rag
 
 
-def _row_to_dict(row) -> dict:
-    d = {}
+def _row_to_dict(row: pd.Series) -> dict[str, Any]:
+    out: dict[str, Any] = {}
     for col in PUBLIC_COLUMNS:
-        val = row.get(col)
-        if val is None:
+        value = row.get(col)
+        if value is None:
             continue
-        if hasattr(val, "item"):
-            val = val.item()
-        d[col] = val
-    return d
+        if hasattr(value, "item"):
+            value = value.item()
+        out[col] = value
+    return out
 
 
-# ── Health ────────────────────────────────────────────────────────────────
+def _infer_intent(query: str) -> str:
+    q = query.lower()
+    if any(k in q for k in ["benchmark", "cis", "nist", "compliance", "framework"]):
+        return "compliance"
+    if any(k in q for k in ["why", "explain", "what happens", "exploited"]):
+        return "risk_explanation"
+    if any(k in q for k in ["fix", "priority", "urgent", "first", "roadmap"]):
+        return "top_priorities"
+    if any(k in q for k in ["cost", "waste", "expensive", "savings", "finops"]):
+        return "cost_waste"
+    if any(k in q for k in ["remediate", "remediation", "mitigate", "harden"]):
+        return "remediation"
+    return "risk_explanation"
+
+
+def _find_resource_in_query(query: str, df: pd.DataFrame) -> str | None:
+    q = query.lower()
+    for rid in df["resource_id"].values:
+        if str(rid).lower() in q:
+            return str(rid)
+    return None
+
 
 @app.get("/health", tags=["System"])
-def health_check():
-    """Lightweight health check for monitoring and load balancers."""
+def health_check() -> dict[str, Any]:
     return {
         "status": "healthy",
         "version": APP_VERSION,
         "uptime_seconds": round(time.time() - _startup_time, 1),
         "llm_provider": LLM_PROVIDER,
+        "simulated_ingestion": USE_SIMULATED_INGESTION,
     }
 
-
-# ── Analysis ──────────────────────────────────────────────────────────────
 
 @app.get("/analysis", tags=["Analysis"])
 def get_analysis(
-    sort_by: str = Query("unified_priority_score", description="Column to sort by"),
-    ascending: bool = Query(False, description="Sort order"),
-    limit: int = Query(0, description="Limit results (0 = all)"),
+    sort_by: str = Query("unified_priority_score"),
+    ascending: bool = Query(False),
+    limit: int = Query(0, ge=0),
 ):
-    """Return all analysed resources with SRS, CRS, and UPS."""
     df = _get_df()
     if sort_by not in df.columns:
         sort_by = "unified_priority_score"
-    sorted_df = df.sort_values(sort_by, ascending=ascending)
+    view = df.sort_values(sort_by, ascending=ascending)
     if limit > 0:
-        sorted_df = sorted_df.head(limit)
-    return {
-        "count": len(sorted_df),
-        "resources": [_row_to_dict(row) for _, row in sorted_df.iterrows()],
-    }
+        view = view.head(limit)
+    return {"count": len(view), "resources": [_row_to_dict(row) for _, row in view.iterrows()]}
 
-
-# ── Recommendations ──────────────────────────────────────────────────────
 
 @app.get("/recommendations", tags=["Analysis"])
-def get_recommendations():
-    """Return the top 5 highest-priority risks with brief descriptions."""
+def get_recommendations(limit: int = Query(5, ge=1, le=50)):
     df = _get_df()
-    top = df.nlargest(5, "unified_priority_score")
-    results = []
+    top = df.nlargest(limit, "unified_priority_score")
+    recommendations = []
     for _, row in top.iterrows():
-        rec = _row_to_dict(row)
-        issues = []
-        if row.get("exposed_to_public"):
-            issues.append("publicly exposed")
-        if row.get("open_security_group"):
-            issues.append("open security group")
-        if not row.get("storage_encrypted", True):
-            issues.append("unencrypted storage")
-        if row.get("idle_resource"):
-            issues.append("idle resource")
-        if row.get("oversized_resource"):
-            issues.append("oversized resource")
-        rec["summary"] = ", ".join(issues) if issues else "elevated risk profile"
-        results.append(rec)
-    return {"recommendations": results}
+        item = _row_to_dict(row)
+        item["summary"] = short_reason(item)
+        item["recommended_action"] = recommended_action(item)
+        recommendations.append(item)
+    return {"count": len(recommendations), "recommendations": recommendations}
 
 
-# ── Explain ──────────────────────────────────────────────────────────────
+@app.get("/roadmap", tags=["Analysis"])
+def get_roadmap(
+    limit: int = Query(100, ge=1, le=500),
+    severity: str | None = Query(None),
+    resource_type: str | None = Query(None),
+    include_remediation: bool = Query(True),
+):
+    """Full fix-first prioritization roadmap sorted by UPS descending."""
+    df = _get_df().sort_values("unified_priority_score", ascending=False)
+    if severity:
+        df = df[df["risk_level"].str.lower() == severity.lower()]
+    if resource_type:
+        df = df[df["resource_type"].str.lower() == resource_type.lower()]
+
+    df = df.head(limit).copy()
+    results = []
+    for i, (_, row) in enumerate(df.iterrows(), start=1):
+        r = _row_to_dict(row)
+        item = {
+            "rank": i,
+            "resource_id": r.get("resource_id"),
+            "resource_type": r.get("resource_type"),
+            "srs": r.get("security_risk_score"),
+            "crs": r.get("cost_risk_score"),
+            "ups": r.get("unified_priority_score"),
+            "severity": r.get("risk_level"),
+            "estimated_monthly_waste": r.get("estimated_waste", 0),
+            "short_reason": short_reason(r),
+        }
+        if include_remediation:
+            item["recommended_action"] = recommended_action(r)
+        results.append(item)
+
+    return {"count": len(results), "roadmap": results}
+
 
 @app.get("/explain/{resource_id}", tags=["AI Copilot"])
 def explain_resource(resource_id: str):
-    """Return an AI-generated explanation and remediation advice."""
     df = _get_df()
     match = df[df["resource_id"] == resource_id]
     if match.empty:
         raise HTTPException(status_code=404, detail=f"Resource '{resource_id}' not found")
-    row = match.iloc[0]
-    resource_dict = _row_to_dict(row)
-    explainer = _get_explainer()
-    explanation = explainer.explain(resource_dict)
-    return {"resource": resource_dict, "explanation": explanation}
+    resource = _row_to_dict(match.iloc[0])
+    explanation = _get_explainer().explain(resource)
+    return {"resource": resource, "explanation": explanation}
 
 
-# ── Stats ────────────────────────────────────────────────────────────────
+@app.post("/copilot/query", tags=["AI Copilot"])
+def copilot_query_v2(body: CopilotQueryRequest):
+    """Natural language copilot endpoint promised in architecture/demo flow."""
+    query = body.query.strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="Query must not be empty.")
+
+    df = _get_df()
+    intent = _infer_intent(query)
+    rag_docs = _get_rag().retrieve_with_metadata(query, top_k=body.top_k)
+    sources = [f"{d['category']}: {d['title']}" for d in rag_docs]
+
+    related_resources: list[dict[str, Any]] = []
+    answer = ""
+
+    if intent in {"risk_explanation", "remediation"}:
+        rid = _find_resource_in_query(query, df)
+        if rid:
+            resource = _row_to_dict(df[df["resource_id"] == rid].iloc[0])
+            details = _get_explainer().explain(resource)
+            related_resources = [resource]
+            answer = (
+                f"{details.get('risk_summary')} Impact: {details.get('exploitation_impact')} "
+                f"Remediation: {'; '.join(details.get('remediation_steps', []))}"
+            )
+            sources = details.get("sources", sources)
+        else:
+            top = df.nlargest(3, "security_risk_score")
+            related_resources = [_row_to_dict(row) for _, row in top.iterrows()]
+            answer = "Top high-risk resources were selected. Ask with a resource ID for a specific explanation."
+
+    elif intent == "top_priorities":
+        top = df.nsmallest(body.top_k, "priority_rank")
+        related_resources = [_row_to_dict(row) for _, row in top.iterrows()]
+        answer = (
+            f"Top {len(related_resources)} fix-first resources are ranked by Unified Priority Score. "
+            "Start with public exposure and open network controls first."
+        )
+
+    elif intent == "cost_waste":
+        top = df.nlargest(body.top_k, "estimated_waste")
+        related_resources = [_row_to_dict(row) for _, row in top.iterrows()]
+        total = round(float(top["estimated_waste"].sum()), 2)
+        answer = (
+            f"Top {len(related_resources)} waste contributors account for about ${total}/month in avoidable spend. "
+            "Focus on idle and oversized compute plus orphaned storage."
+        )
+
+    else:  # compliance
+        answer = (
+            "Relevant benchmark guidance found in CIS/NIST/cloud baseline documents. "
+            "Use these controls to justify remediation priority and compliance reporting."
+        )
+
+    return {
+        "query": query,
+        "answer": answer,
+        "related_resources": related_resources,
+        "sources": sources,
+    }
+
+
+@app.post("/copilot-query", tags=["AI Copilot"])
+def copilot_query_legacy(body: CopilotQueryRequest):
+    """Backward-compatible endpoint used by earlier UI revisions."""
+    result = copilot_query_v2(body)
+    return {
+        "query": result["query"],
+        "category": _infer_intent(result["query"]),
+        "message": result["answer"],
+        "results": result["related_resources"],
+        "sources": result["sources"],
+    }
+
+
+@app.post("/ingestion/normalize", tags=["Ingestion"])
+def ingestion_normalize(payload: IngestionPayloadRequest):
+    """Normalize optional user-supplied simulated cloud telemetry payloads."""
+    records = normalize_cloud_inputs_from_payload(payload.model_dump(), DATASET_PATH)
+    normalized_df = _run_pipeline(records)
+
+    if payload.apply_to_runtime:
+        global _df
+        _df = normalized_df
+
+    preview = normalized_df.nlargest(10, "unified_priority_score")
+    return {
+        "simulated": True,
+        "normalized_records": len(normalized_df),
+        "applied_to_runtime": payload.apply_to_runtime,
+        "top_preview": [_row_to_dict(row) for _, row in preview.iterrows()],
+    }
+
 
 @app.get("/stats", tags=["Dashboard"])
 def get_stats():
-    """Aggregate statistics powering the dashboard widgets."""
     df = _get_df()
-
-    total_waste = round(float(df["estimated_waste"].sum()), 2)
-
+    savings = summarize_cost_savings(df)
     return {
         "total_resources": len(df),
         "critical_count": int((df["risk_level"] == "Critical").sum()),
@@ -200,12 +379,17 @@ def get_stats():
         "avg_security_score": round(float(df["security_risk_score"].mean()), 2),
         "avg_cost_score": round(float(df["cost_risk_score"].mean()), 2),
         "avg_priority_score": round(float(df["unified_priority_score"].mean()), 2),
-        "total_monthly_cost": round(float(df["monthly_cost"].sum()), 2),
-        "estimated_monthly_waste": total_waste,
+        "total_monthly_cost": savings["total_monthly_cost"],
+        "estimated_monthly_waste": round(float(df["estimated_waste"].sum()), 2),
+        "total_avoidable_waste": savings["total_avoidable_waste"],
+        "projected_annual_savings": savings["projected_annual_savings"],
+        "overall_savings_percentage": savings["overall_savings_percentage"],
+        "methodology_note": savings["methodology_note"],
         "publicly_exposed_count": int(df["exposed_to_public"].sum()),
         "unencrypted_count": int((~df["storage_encrypted"]).sum()),
         "idle_count": int(df["idle_resource"].sum()),
         "oversized_count": int(df["oversized_resource"].sum()),
+        "orphaned_asset_count": int(df["orphaned_asset"].sum()),
         "risk_distribution": {
             "Critical": int((df["risk_level"] == "Critical").sum()),
             "High": int((df["risk_level"] == "High").sum()),
@@ -213,49 +397,38 @@ def get_stats():
             "Low": int((df["risk_level"] == "Low").sum()),
         },
         "resource_type_counts": df["resource_type"].value_counts().to_dict(),
-        "provider_counts": (
-            df["cloud_provider"].value_counts().to_dict()
-            if "cloud_provider" in df.columns else {}
-        ),
+        "provider_counts": df["cloud_provider"].value_counts().to_dict() if "cloud_provider" in df.columns else {},
     }
 
 
-# ── Heatmap ──────────────────────────────────────────────────────────────
-
 @app.get("/heatmap", tags=["Dashboard"])
 def get_heatmap():
-    """Return data optimised for rendering a risk heatmap."""
     df = _get_df()
-    heatmap_data = []
-    for _, row in df.iterrows():
-        heatmap_data.append({
-            "resource_id": row["resource_id"],
-            "resource_type": row["resource_type"],
-            "cloud_provider": row.get("cloud_provider", ""),
-            "security_risk_score": round(float(row["security_risk_score"]), 2),
-            "cost_risk_score": round(float(row["cost_risk_score"]), 2),
-            "unified_priority_score": round(float(row["unified_priority_score"]), 2),
-            "risk_level": row["risk_level"],
-        })
-    return {"heatmap": heatmap_data}
+    return {
+        "heatmap": [
+            {
+                "resource_id": row["resource_id"],
+                "resource_type": row["resource_type"],
+                "cloud_provider": row.get("cloud_provider", ""),
+                "security_risk_score": round(float(row["security_risk_score"]), 2),
+                "cost_risk_score": round(float(row["cost_risk_score"]), 2),
+                "unified_priority_score": round(float(row["unified_priority_score"]), 2),
+                "risk_level": row["risk_level"],
+            }
+            for _, row in df.iterrows()
+        ]
+    }
 
-
-# ── Executive Summary ────────────────────────────────────────────────────
 
 @app.get("/executive-summary", tags=["Dashboard"])
 def executive_summary():
-    """High-level executive summary for leadership reporting."""
     df = _get_df()
-
+    savings = summarize_cost_savings(df)
     critical = df[df["risk_level"] == "Critical"]
     high = df[df["risk_level"] == "High"]
     top_risk = df.nlargest(1, "unified_priority_score").iloc[0] if len(df) > 0 else None
 
-    total_waste = round(float(df["estimated_waste"].sum()), 2)
-    total_cost = round(float(df["monthly_cost"].sum()), 2)
-
-    # Find the most common security issue
-    issue_counts = {}
+    issue_counts: dict[str, int] = {}
     if df["exposed_to_public"].sum() > 0:
         issue_counts["Public Exposure"] = int(df["exposed_to_public"].sum())
     if (~df["storage_encrypted"]).sum() > 0:
@@ -271,103 +444,32 @@ def executive_summary():
         "total_resources_analysed": len(df),
         "critical_risks": len(critical),
         "high_risks": len(high),
-        "total_monthly_cost": total_cost,
-        "estimated_monthly_waste": total_waste,
-        "waste_percentage": round((total_waste / total_cost * 100) if total_cost else 0, 1),
+        "total_monthly_cost": savings["total_monthly_cost"],
+        "estimated_monthly_waste": round(float(df["estimated_waste"].sum()), 2),
+        "total_avoidable_waste": savings["total_avoidable_waste"],
+        "projected_annual_savings": savings["projected_annual_savings"],
+        "overall_savings_percentage": savings["overall_savings_percentage"],
+        "waste_percentage": round(
+            (savings["total_avoidable_waste"] / savings["total_monthly_cost"] * 100)
+            if savings["total_monthly_cost"]
+            else 0,
+            1,
+        ),
+        "methodology_note": savings["methodology_note"],
         "top_security_issue": top_issue,
         "issue_breakdown": issue_counts,
         "top_risk_resource": {
             "resource_id": top_risk["resource_id"] if top_risk is not None else "N/A",
             "resource_type": top_risk["resource_type"] if top_risk is not None else "N/A",
             "cloud_provider": top_risk.get("cloud_provider", "N/A") if top_risk is not None else "N/A",
-            "unified_priority_score": round(float(top_risk["unified_priority_score"]), 2) if top_risk is not None else 0,
+            "unified_priority_score": round(float(top_risk["unified_priority_score"]), 2)
+            if top_risk is not None
+            else 0,
         },
         "scoring_methodology": {
             "security_weight": SECURITY_WEIGHT,
             "cost_weight": COST_WEIGHT,
-            "formula": "UPS = 0.7 × SRS + 0.3 × CRS",
+            "formula": "UPS = 0.7 x SRS + 0.3 x CRS",
         },
         "providers_analysed": sorted(df["cloud_provider"].unique().tolist()) if "cloud_provider" in df.columns else [],
-    }
-
-
-# ── Copilot Natural Language Query ───────────────────────────────────────
-
-class CopilotQueryRequest(BaseModel):
-    query: str
-
-
-_CATEGORY_KEYWORDS = {
-    "risk":     ["risk", "dangerous", "vulnerable", "threat", "risky", "security"],
-    "cost":     ["cost", "waste", "expensive", "spend", "money", "saving"],
-    "exposure": ["public", "exposed", "open", "internet", "accessible"],
-    "priority": ["fix", "priority", "urgent", "first", "remediate", "action"],
-    "explain":  ["why", "explain", "reason", "detail", "tell me about"],
-}
-
-
-def _classify_query(query: str) -> str:
-    q = query.lower()
-    # "explain" intent takes priority when explicit question words appear
-    explain_signals = ["why", "explain", "reason", "tell me about"]
-    if any(sig in q for sig in explain_signals):
-        return "explain"
-    scores = {cat: sum(kw in q for kw in kws) for cat, kws in _CATEGORY_KEYWORDS.items()
-              if cat != "explain"}
-    best = max(scores, key=scores.get)
-    return best if scores[best] > 0 else "risk"
-
-
-@app.post("/copilot-query", tags=["AI Copilot"])
-def copilot_query(body: CopilotQueryRequest):
-    """Natural language query interface for the cloud security copilot."""
-    query = body.query.strip()
-    if not query:
-        raise HTTPException(status_code=400, detail="Query must not be empty.")
-
-    df = _get_df()
-    category = _classify_query(query)
-
-    if category == "exposure":
-        subset = df[df["exposed_to_public"] == True]
-        message = f"Found {len(subset)} publicly exposed resources."
-        results = [_row_to_dict(row) for _, row in subset.nlargest(10, "unified_priority_score").iterrows()]
-
-    elif category == "cost":
-        top = df.nlargest(5, "estimated_waste")
-        total_waste = round(float(top["estimated_waste"].sum()), 2)
-        message = f"Top 5 resources by estimated monthly waste (${total_waste} combined)."
-        results = [_row_to_dict(row) for _, row in top.iterrows()]
-
-    elif category == "priority":
-        top = df.nsmallest(5, "priority_rank")
-        message = "Top 5 resources that should be fixed first, ranked by priority."
-        results = [_row_to_dict(row) for _, row in top.iterrows()]
-
-    elif category == "explain":
-        # Try to extract a resource_id from the query, otherwise explain the top risk
-        target_id = None
-        for rid in df["resource_id"].values:
-            if rid.lower() in query.lower():
-                target_id = rid
-                break
-        if target_id is None:
-            target_id = df.nlargest(1, "unified_priority_score").iloc[0]["resource_id"]
-        row = df[df["resource_id"] == target_id].iloc[0]
-        resource_dict = _row_to_dict(row)
-        explainer = _get_explainer()
-        explanation = explainer.explain(resource_dict)
-        message = f"AI explanation for {target_id}."
-        results = [{"resource": resource_dict, "explanation": explanation}]
-
-    else:  # risk (default)
-        top = df.nlargest(5, "unified_priority_score")
-        message = "Top 5 most dangerous resources ranked by Unified Priority Score."
-        results = [_row_to_dict(row) for _, row in top.iterrows()]
-
-    return {
-        "query": query,
-        "category": category,
-        "message": message,
-        "results": results,
     }

@@ -1,119 +1,176 @@
 # GenAI-Powered Cloud Security Copilot
 
-> **Multi-cloud security & cost intelligence platform** that analyses cloud infrastructure, computes quantitative risk scores, and provides explainable AI-driven remediation guidance via Retrieval-Augmented Generation (RAG).
+Hackathon-ready MVP for simulated multi-cloud security risk and cloud cost optimization analysis.
 
----
+Important honesty note: this project uses simulated telemetry and synthetic resource data for demo purposes. It does not claim direct production cloud API integration.
 
-## Problem Statement
+## What This Version Adds
 
-Modern organisations operate across **AWS, Azure, and GCP** simultaneously. Security teams struggle to:
+- Rich structured RAG explanations with four mandatory sections.
+- Natural language copilot query API (`/copilot/query`) and UI panel.
+- Full ranked fix-first remediation roadmap endpoint (`/roadmap`) + UI table.
+- Expanded benchmark-oriented knowledge base (CIS, NIST, cloud baselines, remediation, cost optimization).
+- Simulated cloud-native log ingestion pipeline (`/ingestion/normalize`).
+- Docker + Docker Compose setup for fast demo startup.
+- Explicit cost-savings methodology with annual savings projections.
 
-- **Prioritise risks** across hundreds of heterogeneous resources
-- **Quantify cost waste** from idle and oversized infrastructure
-- **Explain findings** in business-friendly language for executives
+## Architecture (Updated)
 
-This platform solves all three by combining **automated risk scoring** with **AI-generated explanations** in a single dashboard.
-
----
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Multi-Cloud Resource Data                     │
-│              (AWS · Azure · GCP — 350 resources)                │
-└────────────────────────────┬────────────────────────────────────┘
-                             ▼
-              ┌──────────────────────────┐
-              │   ETL & Normalisation    │ ← data_loader/
-              │   (Schema validation,    │
-              │    cloud_provider check) │
-              └────────────┬─────────────┘
-                           ▼
-         ┌─────────────────┴──────────────────┐
-         ▼                                    ▼
-┌──────────────────┐              ┌──────────────────────┐
-│  Security Risk    │              │  Cost Risk            │
-│  Engine (SRS)     │              │  Engine (CRS)         │
-│  ─────────────    │              │  ──────────────       │
-│  P × I × E × C   │              │  U + O + R            │
-│  + MFA factor     │              │  + waste estimation   │
-└────────┬─────────┘              └──────────┬───────────┘
-         └─────────────────┬──────────────────┘
-                           ▼
-              ┌──────────────────────────┐
-              │  Unified Priority Score  │ ← scoring/
-              │  UPS = 0.7×SRS + 0.3×CRS│
-              │  + priority_rank         │
-              └────────────┬─────────────┘
-                           ▼
-              ┌──────────────────────────┐
-              │  RAG Explanation Engine   │ ← ai_explainer/
-              │  SentenceTransformers    │
-              │  + FAISS Vector Store    │
-              │  + 28 Knowledge Docs     │
-              │  (OpenAI / Gemini / TPL) │
-              └────────────┬─────────────┘
-                           ▼
-              ┌──────────────────────────┐
-              │  FastAPI REST API         │ ← main.py
-              │  7 endpoints + /docs     │
-              └────────────┬─────────────┘
-                           ▼
-              ┌──────────────────────────┐
-              │  React Dashboard         │ ← frontend/
-              │  Tabs · Charts · Heatmap │
-              │  Executive Summary       │
-              │  AI Explanation Panel    │
-              └──────────────────────────┘
+```text
+Simulated Cloud Inputs
+  - data/cloud_resources.json
+  - data/logs/iam_logs.json
+  - data/logs/storage_access_logs.json
+  - data/logs/security_groups.json
+  - data/logs/usage_metrics.json
+             |
+             v
+Ingestion + Normalization (services/ingestion.py + data_loader)
+             |
+             v
+Security Risk Engine (SRS) + Cost Risk Engine (CRS)
+             |
+             v
+Unified Priority Score (UPS) + Fix-First Ranking
+             |
+             +--> Cost Savings Methodology (avoidable waste, optimized cost)
+             |
+             +--> RAG Explanation Layer (SentenceTransformers + FAISS)
+                         |
+                         v
+FastAPI Endpoints (analysis, roadmap, copilot, executive summary)
+                         |
+                         v
+React Dashboard (roadmap table, copilot panel, executive metrics)
 ```
 
----
+## API Endpoints
 
-## Features
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/health` | GET | Service health and runtime settings |
+| `/analysis` | GET | Full scored resources |
+| `/recommendations` | GET | Top recommendations, configurable `limit` |
+| `/roadmap` | GET | Full ranked fix-first roadmap with filters |
+| `/explain/{resource_id}` | GET | Structured RAG explanation for a resource |
+| `/copilot/query` | POST | Free-form natural language copilot query |
+| `/copilot-query` | POST | Backward-compatible legacy copilot route |
+| `/stats` | GET | Dashboard metrics including cost-savings summary |
+| `/heatmap` | GET | Risk heatmap data |
+| `/executive-summary` | GET | Leadership-level summary + savings metrics |
+| `/ingestion/normalize` | POST | Normalize optional user-supplied simulated telemetry |
 
-| Category | Details |
-|---|---|
-| **Multi-Cloud Support** | AWS (EC2, S3, RDS, IAM, Lambda, EKS…), Azure (VM, Storage, SQL, AKS…), GCP (Compute, Cloud SQL, GKE…) |
-| **Security Risk Scoring** | Config severity × data sensitivity × exposure level (public, open SG, unencrypted, no MFA) × duration |
-| **Cost Risk Scoring** | Idle detection (CPU < 10%), oversized flagging, estimated monthly waste |
-| **Unified Priority Score** | Weighted composite: 0.7 × Security + 0.3 × Cost, with priority ranking |
-| **RAG AI Explanations** | 28-document knowledge base, FAISS similarity search, provider-aware template explanations |
-| **LLM Integration** | OpenAI GPT-4, Google Gemini, or zero-API-key template fallback |
-| **Executive Summary** | Leadership-ready metrics: critical risks, waste %, top security issue |
-| **Interactive Dashboard** | Tab-based navigation, filterable resource table, risk heatmap, scatter plots |
+### `/copilot/query` request/response
 
----
+Request:
 
-## Quick Start
+```json
+{
+  "query": "What should we fix first?",
+  "top_k": 5
+}
+```
 
-### Prerequisites
+Response:
 
-- **Python 3.10+**, **Node.js 18+**, **npm**
+```json
+{
+  "query": "What should we fix first?",
+  "answer": "Top fix-first resources are ranked by Unified Priority Score...",
+  "related_resources": [{"resource_id": "rds-0150", "risk_level": "Critical"}],
+  "sources": ["cis: CIS Network Exposure Baseline", "remediation: Remediation Playbook: Public Exposure"]
+}
+```
 
-### 1. Backend
+### `/roadmap` query params
+
+- `limit` (default 100)
+- `severity` (e.g. `Critical`, `High`)
+- `resource_type` (exact match)
+- `include_remediation` (`true/false`)
+
+## Structured Explanation Contract
+
+`/explain/{resource_id}` returns explanation JSON that always includes:
+
+- `risk_summary` (why risky)
+- `exploitation_impact` (what happens if exploited)
+- `remediation_steps` (step-by-step list)
+- `business_impact` (enterprise impact)
+- `sources` (RAG benchmark/doc citations)
+
+Backward-compatible fields (`risk`, `impact`, `recommendation`) are still included for existing UI components.
+
+## Simulated Ingestion Inputs
+
+Sample files are under `backend/data/logs/`:
+
+- `iam_logs.json`
+- `storage_access_logs.json`
+- `security_groups.json`
+- `usage_metrics.json`
+
+These are normalized and merged with base inventory by `backend/services/ingestion.py`.
+
+## Knowledge Base and RAG
+
+Knowledge files are organized under `backend/knowledge_base/`:
+
+- `cis/`
+- `nist/`
+- `cloud_baselines/`
+- `remediation/`
+- `cost_optimization/`
+
+Retrieval metadata includes category, title, and source path so UI/API can cite documents clearly.
+
+Rebuild vector index:
+
+```bash
+python scripts/rebuild_index.py
+```
+
+## Cost Savings Methodology (Explicit)
+
+Implemented in `backend/services/cost_savings.py`.
+
+Simulated assumptions:
+
+- Idle compute: 90% of monthly cost avoidable
+- Oversized compute: 40% avoidable
+- Orphaned storage-like assets: 70% avoidable
+
+Per resource metrics:
+
+- `monthly_cost`
+- `avoidable_waste`
+- `projected_optimized_cost`
+- `savings_percentage`
+
+Executive metrics:
+
+- `total_monthly_cost`
+- `total_avoidable_waste`
+- `projected_annual_savings`
+- `overall_savings_percentage`
+
+The commonly referenced 15-30% savings figure is documented as a simulated potential range, not a guaranteed production outcome.
+
+## Local Run Instructions
+
+### Backend
 
 ```bash
 cd backend
 
 # Create virtual environment
 python -m venv venv
-venv\Scripts\activate        # Windows
-# source venv/bin/activate   # macOS/Linux
-
-# Install dependencies
+venv\Scripts\activate
 pip install -r requirements.txt
-
-# (Optional) Regenerate the simulated dataset
-python data/generate_dataset.py
-
-# Start API server
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+python -m uvicorn main:app --host 127.0.0.1 --port 8000
 ```
 
-API docs: **http://localhost:8000/docs**
-
-### 2. Frontend
+### Frontend
 
 ```bash
 cd frontend
@@ -121,152 +178,53 @@ npm install
 npm run dev
 ```
 
-Dashboard: **http://localhost:5173**
+Open:
 
-### 3. (Optional) Enable LLM explanations
+- API docs: `http://127.0.0.1:8000/docs`
+- Dashboard: `http://localhost:5173`
+
+## Docker Instructions
+
+### Build and run backend only
 
 ```bash
-# OpenAI
-set LLM_PROVIDER=openai
-set OPENAI_API_KEY=sk-...
-
-# OR Google Gemini
-set LLM_PROVIDER=gemini
-set GOOGLE_API_KEY=...
+docker build -t cloud-copilot-backend ./backend
+docker run --rm -p 8000:8000 cloud-copilot-backend
 ```
 
-Without these, the system uses **template-based explanations** with RAG context — no API key needed.
+### Build and run frontend only
 
----
+```bash
+docker build -t cloud-copilot-frontend ./frontend
+docker run --rm -p 5173:5173 cloud-copilot-frontend
+```
 
-## API Endpoints
+### Run full stack with one command
 
-| Endpoint | Method | Description |
+```bash
+docker compose up --build
+```
+
+## Environment Variables
+
+| Variable | Default | Description |
 |---|---|---|
-| `/health` | GET | System health, uptime, and LLM provider status |
-| `/analysis` | GET | All resources with SRS, CRS, UPS, priority rank |
-| `/recommendations` | GET | Top 5 highest-priority risks with summaries |
-| `/explain/{resource_id}` | GET | AI-generated explanation & remediation advice |
-| `/stats` | GET | Aggregate dashboard statistics |
-| `/heatmap` | GET | Risk heatmap data |
-| `/executive-summary` | GET | Leadership metrics: risk counts, waste %, top issues |
+| `LLM_PROVIDER` | `none` | `openai`, `gemini`, or `none` |
+| `OPENAI_API_KEY` | empty | OpenAI key |
+| `GOOGLE_API_KEY` | empty | Gemini key |
+| `USE_SIMULATED_INGESTION` | `true` | Use local simulated logs from `data/logs/` |
 
-### Example: `/executive-summary` response
+## Lightweight Tests
 
-```json
-{
-  "total_resources_analysed": 350,
-  "critical_risks": 42,
-  "high_risks": 68,
-  "total_monthly_cost": 87432.50,
-  "estimated_monthly_waste": 12650.80,
-  "waste_percentage": 14.5,
-  "top_security_issue": "Public Exposure",
-  "providers_analysed": ["AWS", "Azure", "GCP"]
-}
+```bash
+cd backend
+pytest -q
 ```
 
----
+Current lightweight tests cover:
 
-## Risk Scoring Models
-
-### Security Risk Score (SRS)
-
-$$SRS = 100 \times \text{normalize}(P \times I \times E \times C)$$
-
-| Factor | Description |
-|---|---|
-| **P** | Configuration severity (0–1) |
-| **I** | Data sensitivity (0–1) |
-| **E** | Exposure level: public (0.45) + open SG (0.30) + unencrypted (0.15) + no MFA (0.10) |
-| **C** | Duration of exposure (normalised days) |
-
-### Cost Risk Score (CRS)
-
-$$CRS = 100 \times \text{normalize}(U + O + R)$$
-
-| Factor | Description |
-|---|---|
-| **U** | Idle resource indicator (CPU < 10%, compute types only) |
-| **O** | Oversized indicator (CPU < 40% with above-median cost) |
-| **R** | Normalised cost impact |
-
-### Unified Priority Score (UPS)
-
-$$UPS = 0.7 \times SRS + 0.3 \times CRS$$
-
-Resources are ranked by UPS and classified as **Critical** (≥ 70), **High** (≥ 40), **Medium** (≥ 20), or **Low** (< 20).
-
----
-
-## Project Structure
-
-```
-backend/
-├── config.py                    # Central configuration
-├── main.py                      # FastAPI app (7 endpoints)
-├── requirements.txt
-├── data/
-│   ├── generate_dataset.py      # Multi-cloud dataset generator
-│   └── cloud_resources.json     # 350 simulated resources
-├── data_loader/
-│   └── loader.py                # ETL pipeline with validation
-├── risk_engine/
-│   └── security_risk.py         # SRS with MFA factor + breakdown
-├── cost_engine/
-│   └── cost_risk.py             # CRS with waste estimation
-├── scoring/
-│   └── unified_scorer.py        # UPS with priority ranking
-└── ai_explainer/
-    ├── knowledge_base.py        # 28 curated knowledge documents
-    ├── rag_engine.py            # FAISS vector store + retrieval
-    └── explainer.py             # LLM/template explanation generator
-
-frontend/
-├── index.html
-├── package.json
-├── vite.config.js
-└── src/
-    ├── App.jsx                  # Tab-based dashboard layout
-    ├── main.jsx
-    ├── index.css                # Dark-theme styles
-    ├── api/
-    │   └── client.js            # Axios API client (8 functions)
-    └── components/
-        ├── Charts.jsx           # Risk distribution & type charts
-        ├── CostSummary.jsx      # Cost optimisation with waste %
-        ├── ExecutiveSummary.jsx  # Leadership executive summary
-        ├── ExplanationPanel.jsx # AI explanation panel
-        ├── ResourceTable.jsx    # Sortable/filterable resource table
-        ├── RiskHeatmap.jsx      # Visual risk heatmap
-        └── TopPriorities.jsx    # Top 5 priority remediations
-```
-
----
-
-## Technology Stack
-
-| Layer | Technology |
-|---|---|
-| **Backend** | Python 3, FastAPI, Pandas, NumPy |
-| **AI/ML** | SentenceTransformers (all-MiniLM-L6-v2), FAISS |
-| **LLM** | OpenAI GPT-4 / Google Gemini / Template fallback |
-| **Frontend** | React 18, Vite 5, Recharts |
-| **API** | REST, Swagger/OpenAPI auto-docs |
-
----
-
-## Configuration
-
-| Environment Variable | Default | Description |
-|---|---|---|
-| `LLM_PROVIDER` | `none` | `openai`, `gemini`, or `none` (template) |
-| `OPENAI_API_KEY` | — | OpenAI API key |
-| `GOOGLE_API_KEY` | — | Google Gemini API key |
-
-All scoring weights and thresholds are configurable in `backend/config.py`.
-
----
+- cost savings metrics generation
+- copilot intent routing keywords
 
 ## License
 

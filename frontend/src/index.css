@@ -848,3 +848,27 @@ tr.clickable {
 .copilot-history-item:hover {
   color: var(--accent-light);
 }
+
+.copilot-sources {
+  margin-top: 14px;
+  padding: 10px 12px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.copilot-source-item {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  padding: 2px 0;
+}
+
+.exec-methodology-note {
+  margin-top: 16px;
+  padding: 10px 14px;
+  border-left: 3px solid var(--accent);
+  background: var(--surface2);
+  border-radius: 8px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}

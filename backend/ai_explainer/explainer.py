@@ -1,27 +1,21 @@
-"""
-AI Explainer – generates natural language explanations for detected risks.
-Supports three modes:
-  1. OpenAI  (LLM_PROVIDER=openai + OPENAI_API_KEY)
-  2. Gemini  (LLM_PROVIDER=gemini + GOOGLE_API_KEY)
-  3. Template fallback with RAG context (default, no API key needed)
-"""
+"""AI explainer with RAG-backed, structured enterprise-ready output."""
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from backend.ai_explainer.rag_engine import RAGEngine
-from backend.config import LLM_PROVIDER, OPENAI_API_KEY, GOOGLE_API_KEY, COMPUTE_TYPES
+from backend.config import COMPUTE_TYPES, GOOGLE_API_KEY, LLM_PROVIDER, OPENAI_API_KEY
 
 
 class AIExplainer:
-    """Generates risk explanations using RAG + LLM (or template fallback)."""
+    """Generates risk explanations using RAG + optional LLM providers."""
 
     def __init__(self):
         self.rag = RAGEngine()
 
     def _build_query(self, resource: dict[str, Any]) -> str:
-        """Construct a natural-language query from resource attributes."""
         parts = [
             f"Resource type: {resource.get('resource_type', 'Unknown')}",
             f"Publicly exposed: {resource.get('exposed_to_public', False)}",
@@ -35,10 +29,19 @@ class AIExplainer:
         ]
         return "Cloud resource security analysis: " + "; ".join(parts)
 
-    def _build_prompt(self, resource: dict[str, Any], context_docs: list[str]) -> str:
-        """Build the LLM prompt with retrieved context."""
-        context_block = "\n\n---\n\n".join(context_docs)
-        return f"""You are a cloud security expert copilot. Based on the following knowledge base context and resource details, provide a concise security and cost analysis.
+    def _build_prompt(self, resource: dict[str, Any], context_docs: list[dict]) -> str:
+        context_block = "\n\n---\n\n".join(
+            [
+                (
+                    f"[{doc.get('category', 'general')}] {doc.get('title', 'Untitled')}"
+                    f"\nSource: {doc.get('source', 'inline')}"
+                    f"\n{doc.get('content', '')}"
+                )
+                for doc in context_docs
+            ]
+        )
+
+        return f"""You are a cloud security expert copilot. Use the context and resource metadata to generate concise enterprise-ready JSON.
 
 KNOWLEDGE BASE CONTEXT:
 {context_block}
@@ -60,134 +63,92 @@ RESOURCE DETAILS:
 - Cost Risk Score: {resource.get('cost_risk_score', 'N/A')}
 - Unified Priority Score: {resource.get('unified_priority_score', 'N/A')}
 
-Provide your analysis in this exact format:
-Risk: <one-line risk summary>
-Impact: <potential business impact>
-Recommendation: <specific remediation steps>
-Business Impact: <cost and compliance implications>"""
+Return valid JSON only:
+{{
+  "risk_summary": "...",
+  "exploitation_impact": "...",
+  "remediation_steps": ["...", "..."],
+  "business_impact": "..."
+}}
+"""
 
-    def _template_explanation(self, resource: dict[str, Any], context_docs: list[str]) -> dict:
-        """Generate explanation using templates when no LLM is available."""
-        risks = []
-        impacts = []
-        recommendations = []
+    def _template_explanation(self, resource: dict[str, Any], context_docs: list[dict]) -> dict:
+        risks: list[str] = []
+        impacts: list[str] = []
+        remediation_steps: list[str] = []
 
         rtype = resource.get("resource_type", "Unknown")
         rid = resource.get("resource_id", "unknown")
         provider = resource.get("cloud_provider", "Unknown")
 
-        # --- Security findings ---
         if resource.get("exposed_to_public"):
-            risks.append(f"Publicly exposed {rtype} resource ({rid}) on {provider}")
-            impacts.append("Potential unauthorized access, data leakage, and regulatory violations")
-            if provider == "AWS":
-                recommendations.append("Disable public access; move to private subnet behind ALB/NLB; use VPC endpoints")
-            elif provider == "Azure":
-                recommendations.append("Remove public IP; use Azure Bastion for access; configure NSG deny-all default")
-            elif provider == "GCP":
-                recommendations.append("Remove external IP; use Identity-Aware Proxy (IAP); restrict VPC firewall rules")
-            else:
-                recommendations.append("Disable public access and move to private subnet")
+            risks.append(f"{rtype} ({rid}) is publicly exposed")
+            impacts.append("Unauthorized access and potential data exfiltration risk")
+            remediation_steps.append("Remove public exposure and move service behind private networking controls")
 
         if resource.get("open_security_group"):
-            risks.append("Open security group / firewall allowing unrestricted inbound traffic (0.0.0.0/0)")
-            impacts.append("Dramatically increased attack surface for brute-force, port scanning, and exploitation")
-            recommendations.append(
-                "Restrict rules to specific CIDR ranges and required ports only; "
-                "enable flow logs for traffic monitoring"
-            )
+            risks.append("Network rules allow broad inbound access")
+            impacts.append("Increased attack surface for scanning and exploitation")
+            remediation_steps.append("Restrict inbound CIDR and ports to approved access paths")
 
         if not resource.get("storage_encrypted", True):
-            risks.append("Storage is NOT encrypted at rest")
-            impacts.append(
-                "Data exposure if media is compromised; violates PCI DSS, HIPAA, "
-                "SOC 2 compliance requirements"
-            )
-            if provider == "Azure":
-                recommendations.append("Enable Azure Storage Service Encryption with customer-managed keys")
-            elif provider == "GCP":
-                recommendations.append("Enable Customer-Managed Encryption Keys (CMEK) for Cloud Storage")
-            else:
-                recommendations.append("Enable default EBS/S3 encryption using KMS-managed keys")
+            risks.append("Storage is not encrypted at rest")
+            impacts.append("Sensitive data may be exposed if storage is compromised")
+            remediation_steps.append("Enable encryption at rest with managed encryption keys")
 
         severity = resource.get("config_severity", 0)
         if severity > 0.7:
-            risks.append(f"High configuration severity ({severity:.2f}) — multiple deviations from security baselines")
-            impacts.append("Compounding misconfigurations significantly amplify overall breach probability")
-            recommendations.append(
-                "Run compliance scan with AWS Config / Azure Policy / GCP Security Command Center; "
-                "remediate all critical findings"
-            )
-
-        sensitivity = resource.get("data_sensitivity", 0)
-        if sensitivity > 0.7:
-            impacts.append(
-                f"High data sensitivity ({sensitivity:.2f}) — breach impact is amplified; "
-                "potential PII / PHI / financial data exposure"
-            )
-            recommendations.append(
-                "Classify data; apply DLP policies; ensure encryption and access controls "
-                "proportional to sensitivity level"
-            )
+            risks.append(f"High configuration severity ({severity:.2f})")
+            impacts.append("Multiple baseline deviations can compound breach probability")
+            remediation_steps.append("Run baseline compliance scan and remediate critical findings")
 
         days = resource.get("days_exposed", 0)
         if days > 90:
-            risks.append(f"Resource has been exposed for {days} days without remediation")
-            impacts.append("Prolonged exposure dramatically increases probability of discovery and exploitation")
-            recommendations.append("Implement SLA-based remediation; set up automated alerting for exposure > 30 days")
+            risks.append(f"Exposure has persisted for {days} days")
+            impacts.append("Long-lived exposure increases probability of successful compromise")
+            remediation_steps.append("Set SLA-based remediation alerts for exposures older than 30 days")
 
-        # --- Cost findings ---
         cpu = resource.get("cpu_usage", 100)
         cost = resource.get("monthly_cost", 0)
         if cpu < 10 and rtype in COMPUTE_TYPES:
-            risks.append(f"Idle {rtype} resource with only {cpu}% CPU utilization")
-            waste = cost * 0.9
-            impacts.append(f"Estimated waste of ~${waste:.2f}/month on an underutilized resource")
-            recommendations.append(
-                "Terminate if unused; schedule stop outside business hours; "
-                "or right-size to a smaller instance type"
-            )
+            risks.append(f"Compute is idle ({cpu}% CPU utilization)")
+            impacts.append(f"Potential avoidable waste of about ${cost * 0.9:.2f} per month")
+            remediation_steps.append("Stop, schedule, or decommission idle compute resources")
         elif cpu < 40 and cost > 100 and rtype in COMPUTE_TYPES:
-            risks.append(f"Oversized {rtype} resource ({cpu}% CPU at ${cost:.2f}/month)")
-            waste = cost * 0.4
-            impacts.append(f"Estimated ~${waste:.2f}/month in unnecessary spend from over-provisioning")
-            recommendations.append(
-                "Right-size using Compute Optimizer (AWS) / Azure Advisor / GCP Recommender; "
-                "consider reserved/committed pricing"
-            )
+            risks.append(f"Compute appears oversized ({cpu}% CPU at ${cost:.2f}/month)")
+            impacts.append(f"Potential avoidable waste of about ${cost * 0.4:.2f} per month")
+            remediation_steps.append("Right-size instances using cloud recommendation tooling")
 
         if not risks:
-            risks.append(f"{rtype} resource {rid} on {provider} has a moderate risk profile")
-            impacts.append("Standard operational risk — continue periodic review and compliance checks")
-            recommendations.append("Maintain current security baselines; schedule quarterly configuration audit")
+            risks.append("Resource shows moderate risk profile based on current controls")
+            impacts.append("No immediate critical exploit path detected")
+            remediation_steps.append("Maintain baseline checks and periodic hardening reviews")
 
-        # Incorporate RAG context
-        context_titles = []
-        if context_docs:
-            for doc in context_docs[:2]:
-                title = doc.split("\n")[0]
-                context_titles.append(title)
-
-        srs = resource.get("security_risk_score", "N/A")
-        crs = resource.get("cost_risk_score", "N/A")
-        ups = resource.get("unified_priority_score", "N/A")
+        sources = [f"{doc.get('category', 'general')}: {doc.get('title', 'Untitled')}" for doc in context_docs[:3]]
+        risk_summary = "; ".join(risks)
+        exploitation_impact = "; ".join(impacts)
+        business_impact = (
+            f"SRS {resource.get('security_risk_score', 'N/A')}/100, "
+            f"CRS {resource.get('cost_risk_score', 'N/A')}/100, "
+            f"UPS {resource.get('unified_priority_score', 'N/A')}/100. "
+            "This finding can affect security posture, compliance outcomes, and cloud spend efficiency."
+        )
 
         return {
             "resource_id": rid,
-            "risk": "; ".join(risks),
-            "impact": "; ".join(impacts) if impacts else "Standard operational risk.",
-            "recommendation": "; ".join(recommendations),
-            "business_impact": (
-                f"Security Risk Score: {srs}/100 | "
-                f"Cost Risk Score: {crs}/100 | "
-                f"Unified Priority Score: {ups}/100. "
-                f"Related best practices: {', '.join(context_titles) if context_titles else 'N/A'}"
-            ),
+            "resource_type": rtype,
+            "risk_summary": risk_summary,
+            "exploitation_impact": exploitation_impact,
+            "remediation_steps": remediation_steps,
+            "business_impact": business_impact,
+            "sources": sources,
+            "risk": risk_summary,
+            "impact": exploitation_impact,
+            "recommendation": "; ".join(remediation_steps),
             "source": "template",
         }
 
     def _llm_openai(self, prompt: str) -> str:
-        """Call OpenAI API."""
         import openai
 
         client = openai.OpenAI(api_key=OPENAI_API_KEY)
@@ -200,7 +161,6 @@ Business Impact: <cost and compliance implications>"""
         return response.choices[0].message.content
 
     def _llm_gemini(self, prompt: str) -> str:
-        """Call Google Gemini API."""
         import google.generativeai as genai
 
         genai.configure(api_key=GOOGLE_API_KEY)
@@ -208,39 +168,48 @@ Business Impact: <cost and compliance implications>"""
         response = model.generate_content(prompt)
         return response.text
 
-    def _parse_llm_response(self, text: str, resource_id: str) -> dict:
-        """Parse structured LLM response into a dict."""
-        result = {"resource_id": resource_id, "source": "llm"}
-        for line in text.strip().split("\n"):
-            line = line.strip()
-            if line.lower().startswith("risk:"):
-                result["risk"] = line.split(":", 1)[1].strip()
-            elif line.lower().startswith("impact:"):
-                result["impact"] = line.split(":", 1)[1].strip()
-            elif line.lower().startswith("recommendation:"):
-                result["recommendation"] = line.split(":", 1)[1].strip()
-            elif line.lower().startswith("business impact:"):
-                result["business_impact"] = line.split(":", 1)[1].strip()
+    def _parse_llm_response(self, text: str, resource: dict[str, Any], context_docs: list[dict]) -> dict:
+        rid = resource.get("resource_id", "")
+        rtype = resource.get("resource_type", "Unknown")
 
-        # Fallback for missing fields
-        for key in ("risk", "impact", "recommendation", "business_impact"):
-            if key not in result:
-                result[key] = text[:200] if key == "risk" else "See full analysis."
+        try:
+            raw = json.loads(text)
+            risk_summary = raw.get("risk_summary", "See detailed analysis")
+            exploitation_impact = raw.get("exploitation_impact", "Potential exploitation impact is elevated")
+            remediation_steps = raw.get("remediation_steps", ["Review and apply recommended controls"])
+            if not isinstance(remediation_steps, list) or not remediation_steps:
+                remediation_steps = [str(remediation_steps)]
+            business_impact = raw.get("business_impact", "Security and cost impacts require remediation")
+        except Exception:
+            return self._template_explanation(resource, context_docs)
 
-        return result
+        sources = [f"{doc.get('category', 'general')}: {doc.get('title', 'Untitled')}" for doc in context_docs[:3]]
+        return {
+            "resource_id": rid,
+            "resource_type": rtype,
+            "risk_summary": risk_summary,
+            "exploitation_impact": exploitation_impact,
+            "remediation_steps": remediation_steps,
+            "business_impact": business_impact,
+            "sources": sources,
+            "risk": risk_summary,
+            "impact": exploitation_impact,
+            "recommendation": "; ".join(remediation_steps),
+            "source": "llm",
+        }
 
     def explain(self, resource: dict[str, Any]) -> dict:
-        """Generate an explanation for a resource's risk profile."""
         query = self._build_query(resource)
-        context_docs = self.rag.retrieve(query, top_k=3)
+        context_docs = self.rag.retrieve_with_metadata(query, top_k=3)
 
         if LLM_PROVIDER == "openai" and OPENAI_API_KEY:
             prompt = self._build_prompt(resource, context_docs)
             raw = self._llm_openai(prompt)
-            return self._parse_llm_response(raw, resource.get("resource_id", ""))
-        elif LLM_PROVIDER == "gemini" and GOOGLE_API_KEY:
+            return self._parse_llm_response(raw, resource, context_docs)
+
+        if LLM_PROVIDER == "gemini" and GOOGLE_API_KEY:
             prompt = self._build_prompt(resource, context_docs)
             raw = self._llm_gemini(prompt)
-            return self._parse_llm_response(raw, resource.get("resource_id", ""))
-        else:
-            return self._template_explanation(resource, context_docs)
+            return self._parse_llm_response(raw, resource, context_docs)
+
+        return self._template_explanation(resource, context_docs)

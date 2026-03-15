@@ -15,6 +15,9 @@ export default function ExecutiveSummary({ summary }) {
     top_risk_resource,
     providers_analysed,
     scoring_methodology,
+    projected_annual_savings,
+    overall_savings_percentage,
+    methodology_note,
   } = summary;
 
   return (
@@ -53,6 +56,14 @@ export default function ExecutiveSummary({ summary }) {
         <div className="exec-card">
           <div className="exec-label">Waste %</div>
           <div className="exec-value high">{waste_percentage}%</div>
+        </div>
+        <div className="exec-card">
+          <div className="exec-label">Projected Annual Savings</div>
+          <div className="exec-value accent">${projected_annual_savings?.toLocaleString()}</div>
+        </div>
+        <div className="exec-card">
+          <div className="exec-label">Overall Savings %</div>
+          <div className="exec-value high">{overall_savings_percentage}%</div>
         </div>
       </div>
 
@@ -107,6 +118,10 @@ export default function ExecutiveSummary({ summary }) {
             </span>
           ))}
         </div>
+      )}
+
+      {methodology_note && (
+        <div className="exec-methodology-note">{methodology_note}</div>
       )}
     </div>
   );

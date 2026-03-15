@@ -4,6 +4,10 @@ export default function ExplanationPanel({ data, onClose }) {
   if (!data) return null;
 
   const { resource, explanation } = data;
+  const riskSummary = explanation?.risk_summary || explanation?.risk;
+  const exploitationImpact = explanation?.exploitation_impact || explanation?.impact;
+  const remediationSteps = explanation?.remediation_steps || [];
+  const recommendationText = explanation?.recommendation;
 
   return (
     <div className="explain-panel">
@@ -53,24 +57,41 @@ export default function ExplanationPanel({ data, onClose }) {
       </div>
 
       <div className="explain-field">
-        <div className="field-label">Risk</div>
-        <div className="field-value">{explanation?.risk}</div>
+        <div className="field-label">Why This Resource Is Risky</div>
+        <div className="field-value">{riskSummary}</div>
       </div>
 
       <div className="explain-field">
-        <div className="field-label">Impact</div>
-        <div className="field-value">{explanation?.impact}</div>
+        <div className="field-label">What Happens If Exploited</div>
+        <div className="field-value">{exploitationImpact}</div>
       </div>
 
       <div className="explain-field">
-        <div className="field-label">Recommendation</div>
-        <div className="field-value">{explanation?.recommendation}</div>
+        <div className="field-label">Step-by-Step Remediation</div>
+        <div className="field-value">
+          {Array.isArray(remediationSteps) && remediationSteps.length > 0 ? (
+            <ol style={{ paddingLeft: 18 }}>
+              {remediationSteps.map((step, idx) => (
+                <li key={idx}>{step}</li>
+              ))}
+            </ol>
+          ) : (
+            recommendationText
+          )}
+        </div>
       </div>
 
       <div className="explain-field">
         <div className="field-label">Business Impact</div>
         <div className="field-value">{explanation?.business_impact}</div>
       </div>
+
+      {Array.isArray(explanation?.sources) && explanation.sources.length > 0 && (
+        <div className="explain-field">
+          <div className="field-label">Sources</div>
+          <div className="field-value">{explanation.sources.join(" | ")}</div>
+        </div>
+      )}
 
       {explanation?.source && (
         <p style={{ fontSize: "0.7rem", color: "var(--text-muted)", marginTop: 12 }}>

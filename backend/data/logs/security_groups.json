@@ -1,0 +1,7 @@
+[
+  {"resource_id": "ec2-0012", "group_name": "sg-web-open", "allows_0_0_0_0": true, "open_ports": [22, 80, 443]},
+  {"resource_id": "rds-0150", "group_name": "sg-db-open", "allows_0_0_0_0": true, "open_ports": [3306]},
+  {"resource_id": "azure-vm-0064", "group_name": "nsg-public-rdp", "allows_0_0_0_0": true, "open_ports": [3389]},
+  {"resource_id": "gcp-compute-0048", "group_name": "fw-open-ssh", "allows_0_0_0_0": true, "open_ports": [22]},
+  {"resource_id": "azure-aks-0262", "group_name": "nsg-private", "allows_0_0_0_0": false, "open_ports": []}
+]

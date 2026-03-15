@@ -9,7 +9,7 @@ const SUGGESTIONS = [
 ];
 
 function ResultCard({ resource, onSelect }) {
-  const r = resource.resource || resource;
+  const r = resource;
   return (
     <div className="copilot-result-card" onClick={() => onSelect?.(r.resource_id)}>
       <div className="copilot-result-header">
@@ -27,14 +27,6 @@ function ResultCard({ resource, onSelect }) {
           </span>
         )}
       </div>
-      {resource.explanation && (
-        <div className="copilot-result-explain">
-          <div className="field-label">Risk</div>
-          <div className="field-value">{resource.explanation.risk}</div>
-          <div className="field-label" style={{ marginTop: 8 }}>Recommendation</div>
-          <div className="field-value">{resource.explanation.recommendation}</div>
-        </div>
-      )}
     </div>
   );
 }
@@ -57,7 +49,7 @@ export default function CopilotChat({ onSelectResource }) {
     try {
       const data = await fetchCopilotQuery(text);
       setResponse(data);
-      setHistory((prev) => [{ query: text, category: data.category }, ...prev.slice(0, 4)]);
+      setHistory((prev) => [{ query: text }, ...prev.slice(0, 4)]);
     } catch (err) {
       setError(err.response?.data?.detail || err.message || "Query failed");
     } finally {
@@ -78,7 +70,7 @@ export default function CopilotChat({ onSelectResource }) {
         <h2 className="section-title">
           <span style={{ marginRight: 8 }}>🤖</span>AI Security Copilot
         </h2>
-        <span className="copilot-hint">Ask about risks, costs, exposures, or priorities</span>
+        <span className="copilot-hint">Ask about risks, cost waste, remediation, or compliance benchmarks</span>
       </div>
 
       {/* Suggestion chips */}
@@ -131,11 +123,10 @@ export default function CopilotChat({ onSelectResource }) {
       {response && !loading && (
         <div className="copilot-response">
           <div className="copilot-message">
-            <span className="copilot-category-badge">{response.category}</span>
-            {response.message}
+            {response.answer}
           </div>
           <div className="copilot-results">
-            {response.results.map((r, i) => (
+            {(response.related_resources || []).map((r, i) => (
               <ResultCard
                 key={r.resource_id || r.resource?.resource_id || i}
                 resource={r}
@@ -143,6 +134,14 @@ export default function CopilotChat({ onSelectResource }) {
               />
             ))}
           </div>
+          {(response.sources || []).length > 0 && (
+            <div className="copilot-sources">
+              <div className="copilot-history-label">Sources</div>
+              {(response.sources || []).map((s, i) => (
+                <div key={i} className="copilot-source-item">{s}</div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

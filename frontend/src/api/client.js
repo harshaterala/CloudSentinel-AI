@@ -38,6 +38,16 @@ export async function fetchHealth() {
 }
 
 export async function fetchCopilotQuery(query) {
-  const { data } = await API.post("/copilot-query", { query });
+  const { data } = await API.post("/copilot/query", { query });
+  return data;
+}
+
+export async function fetchRoadmap(limit = 10) {
+  const { data } = await API.get("/roadmap", { params: { limit, include_remediation: true } });
+  return data;
+}
+
+export async function runIngestionNormalize(payload) {
+  const { data } = await API.post("/ingestion/normalize", payload);
   return data;
 }

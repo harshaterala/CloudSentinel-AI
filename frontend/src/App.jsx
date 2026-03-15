@@ -6,6 +6,7 @@ import {
   fetchHeatmap,
   fetchExplanation,
   fetchExecutiveSummary,
+  fetchRoadmap,
 } from "./api/client";
 import RiskHeatmap from "./components/RiskHeatmap";
 import ResourceTable from "./components/ResourceTable";
@@ -15,6 +16,8 @@ import ExplanationPanel from "./components/ExplanationPanel";
 import Charts from "./components/Charts";
 import ExecutiveSummary from "./components/ExecutiveSummary";
 import CopilotChat from "./components/CopilotChat";
+import RoadmapTable from "./components/RoadmapTable";
+import IngestionPanel from "./components/IngestionPanel";
 
 export default function App() {
   const [resources, setResources] = useState([]);
@@ -22,27 +25,34 @@ export default function App() {
   const [stats, setStats] = useState(null);
   const [heatmap, setHeatmap] = useState([]);
   const [execSummary, setExecSummary] = useState(null);
+  const [roadmap, setRoadmap] = useState([]);
   const [explanation, setExplanation] = useState(null);
   const [loading, setLoading] = useState(true);
   const [explaining, setExplaining] = useState(false);
   const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState("dashboard");
 
+  const loadDashboard = useCallback(async () => {
+    const [analysisRes, recsRes, statsRes, heatmapRes, execRes, roadmapRes] = await Promise.all([
+      fetchAnalysis(),
+      fetchRecommendations(),
+      fetchStats(),
+      fetchHeatmap(),
+      fetchExecutiveSummary(),
+      fetchRoadmap(10),
+    ]);
+    setResources(analysisRes.resources || []);
+    setRecommendations(recsRes.recommendations || []);
+    setStats(statsRes);
+    setHeatmap(heatmapRes.heatmap || []);
+    setExecSummary(execRes);
+    setRoadmap(roadmapRes.roadmap || []);
+  }, []);
+
   useEffect(() => {
     async function load() {
       try {
-        const [analysisRes, recsRes, statsRes, heatmapRes, execRes] = await Promise.all([
-          fetchAnalysis(),
-          fetchRecommendations(),
-          fetchStats(),
-          fetchHeatmap(),
-          fetchExecutiveSummary(),
-        ]);
-        setResources(analysisRes.resources || []);
-        setRecommendations(recsRes.recommendations || []);
-        setStats(statsRes);
-        setHeatmap(heatmapRes.heatmap || []);
-        setExecSummary(execRes);
+        await loadDashboard();
       } catch (err) {
         setError(err.message || "Failed to load data");
       } finally {
@@ -50,7 +60,7 @@ export default function App() {
       }
     }
     load();
-  }, []);
+  }, [loadDashboard]);
 
   const handleSelectResource = useCallback(async (resourceId) => {
     setExplaining(true);
@@ -194,6 +204,8 @@ export default function App() {
             <TopPriorities recommendations={recommendations} onSelect={handleSelectResource} />
             <CostSummary stats={stats} />
           </div>
+
+          <RoadmapTable roadmap={roadmap} onSelect={handleSelectResource} />
         </>
       )}
 
@@ -209,7 +221,10 @@ export default function App() {
 
       {/* Tab: AI Copilot */}
       {activeTab === "copilot" && (
-        <CopilotChat onSelectResource={handleSelectResource} />
+        <>
+          <CopilotChat onSelectResource={handleSelectResource} />
+          <IngestionPanel onApplied={loadDashboard} />
+        </>
       )}
     </div>
   );
