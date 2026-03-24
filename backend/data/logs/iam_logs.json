@@ -1,0 +1,7 @@
+[
+  {"event_time": "2026-03-01T08:22:00Z", "resource_id": "iam-0005", "actor": "admin@example.com", "action": "AttachPolicy", "over_permissive_policy": true, "mfa_disabled": true},
+  {"event_time": "2026-03-02T11:42:00Z", "resource_id": "azure-ad-0043", "actor": "secops@example.com", "action": "RoleAssignment", "over_permissive_policy": true, "mfa_disabled": false},
+  {"event_time": "2026-03-02T15:18:00Z", "resource_id": "gcp-iam-0027", "actor": "service-account", "action": "SetIamPolicy", "over_permissive_policy": true, "mfa_disabled": false},
+  {"event_time": "2026-03-03T04:03:00Z", "resource_id": "ec2-0012", "actor": "automation", "action": "AssumeRole", "over_permissive_policy": false, "mfa_disabled": false},
+  {"event_time": "2026-03-03T17:32:00Z", "resource_id": "azure-vm-0064", "actor": "devops@example.com", "action": "RoleAssignment", "over_permissive_policy": false, "mfa_disabled": true}
+]

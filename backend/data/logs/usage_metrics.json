@@ -1,0 +1,10 @@
+[
+  {"resource_id": "ec2-0012", "cpu_usage": 5.5, "monthly_cost": 410.0},
+  {"resource_id": "rds-0150", "cpu_usage": 18.2, "monthly_cost": 325.0},
+  {"resource_id": "azure-aks-0262", "cpu_usage": 7.1, "monthly_cost": 710.0},
+  {"resource_id": "azure-vm-0064", "cpu_usage": 28.4, "monthly_cost": 280.0},
+  {"resource_id": "gcp-compute-0048", "cpu_usage": 12.6, "monthly_cost": 265.0},
+  {"resource_id": "s3-0009", "cpu_usage": 0.0, "monthly_cost": 190.0},
+  {"resource_id": "azure-storage-0018", "cpu_usage": 0.0, "monthly_cost": 120.0},
+  {"resource_id": "gcp-storage-0042", "cpu_usage": 0.0, "monthly_cost": 140.0}
+]
